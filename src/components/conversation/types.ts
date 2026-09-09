@@ -23,6 +23,7 @@ export interface SpeechRecognition {
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
+  abort?: () => void;
 }
 
 export interface AiChatMessage {

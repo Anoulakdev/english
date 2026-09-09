@@ -60,6 +60,7 @@ export default function ConversationPage() {
   // Audio & Speech Recognition States
   const [isRecording, setIsRecording] = useState(false);
   const [isRecognitionSupported, setIsRecognitionSupported] = useState(true);
+  const [micError, setMicError] = useState<string | null>(null);
 
   // Refs to avoid stale closures & handle lifecycle cleanly
   const selectedScenarioRef = useRef<ConversationScenario | null>(null);
@@ -276,9 +277,11 @@ export default function ConversationPage() {
 
     if (!SpeechRecognitionConstructor) {
       setIsRecognitionSupported(false);
+      setMicError('Browser ຂອງທ່ານບໍ່ຮອງຮັບ Speech Recognition (ແນະນຳໃຫ້ໃຊ້ Google Chrome ຫຼື Safari)');
       return;
     }
 
+    setMicError(null);
     stopAudio();
     currentTranscriptRef.current = '';
     setUserInputText('');
@@ -303,6 +306,7 @@ export default function ConversationPage() {
       rec.onstart = () => {
         setIsRecording(true);
         isRecordingRef.current = true;
+        setMicError(null);
       };
 
       rec.onresult = (event: SpeechRecognitionEvent) => {
@@ -322,6 +326,11 @@ export default function ConversationPage() {
 
       rec.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.warn('Speech recognition status/error:', event.error);
+        if (event.error === 'not-allowed') {
+          setMicError('ກະລຸນາອະນຸຍາດການໃຊ້ໄມໂຄຣໂຟນ (Please allow microphone access in browser settings)');
+        } else if (event.error === 'network') {
+          setMicError('ມີບັນຫາການເຊື່ອມຕໍ່ກັບບໍລິການ Speech Recognition');
+        }
         if (event.error !== 'no-speech') {
           setIsRecording(false);
           isRecordingRef.current = false;
@@ -341,6 +350,7 @@ export default function ConversationPage() {
       console.error('Failed to start speech recognition:', err);
       setIsRecording(false);
       isRecordingRef.current = false;
+      setMicError('ບໍ່ສາມາດເປີດໄມໂຄຣໂຟນໄດ້ ກະລຸນາກວດສອບສິດການໃຊ້ງານ');
     }
   }, []);
 
@@ -367,6 +377,24 @@ export default function ConversationPage() {
       }
     }, 120);
   }, [sendUserMessageToAi]);
+
+  // Cancel speech recognition without sending
+  const handleCancelRecording = useCallback(() => {
+    const rec = recognitionInstanceRef.current;
+    if (rec) {
+      try {
+        rec.onend = null;
+        rec.onerror = null;
+        rec.abort();
+      } catch {}
+      recognitionInstanceRef.current = null;
+    }
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    currentTranscriptRef.current = '';
+    setUserInputText('');
+    userInputTextRef.current = '';
+  }, []);
 
   const repeatLine = (text: string) => {
     stopAudio();
@@ -418,6 +446,9 @@ export default function ConversationPage() {
                 isRecognitionSupported={isRecognitionSupported}
                 onStartRecording={handleStartRecording}
                 onStopRecording={handleStopRecording}
+                onCancelRecording={handleCancelRecording}
+                micError={micError}
+                onClearMicError={() => setMicError(null)}
                 inputRef={inputRef}
               />
             </div>
