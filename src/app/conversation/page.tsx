@@ -73,6 +73,8 @@ export default function ConversationPage() {
   const recognitionInstanceRef = useRef<ISpeechRecognition | null>(null);
   const currentTranscriptRef = useRef<string>('');
   const isRecordingRef = useRef<boolean>(false);
+  const shouldSendOnEndRef = useRef<boolean>(false);
+  const stopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -166,6 +168,17 @@ export default function ConversationPage() {
         }
       } catch (err) {
         console.error('Failed to get AI response:', err);
+        const fallbackReply: AiChatMessage = {
+          id: `ai_${Date.now()}`,
+          speaker: 'AI',
+          speakerName: 'AI Partner',
+          text: "I heard you! That's interesting, could you please tell me more?",
+          meaning_lao: "ຂ້ອຍໄດ້ຍິນເຈົ້າແລ້ວ! ໜ້າສົນໃຈຫຼາຍ, ເຈົ້າຊ່ວຍບອກຂ້ອຍຕື່ມອີກໜ້ອຍໜຶ່ງໄດ້ບໍ່?",
+          timestamp: Date.now(),
+        };
+        const nextHistory = [...aiChatHistoryRef.current, fallbackReply];
+        setAiChatHistory(nextHistory);
+        aiChatHistoryRef.current = nextHistory;
       } finally {
         setIsAiLoading(false);
         isAiLoadingRef.current = false;
@@ -232,7 +245,17 @@ export default function ConversationPage() {
           playAudio(initialAiMsg.text);
         }
       } catch (err) {
-        console.error('Failed to initialize AI scenario:', err);
+        console.error('Failed to initialize AI scenario, using fallback greeting:', err);
+        const fallbackMsg: AiChatMessage = {
+          id: `ai_${Date.now()}`,
+          speaker: 'AI',
+          speakerName: 'AI Partner',
+          text: `Welcome to ${scenario.title_en}! How can I help you today?`,
+          meaning_lao: `ຍິນດີຕ້ອນຮັບສູ່ ${scenario.title_lao}! ຂ້ອຍສາມາດຊ່ວຍຫຍັງເຈົ້າໄດ້ແດ່ໃນມື້ນີ້?`,
+          timestamp: Date.now(),
+        };
+        setAiChatHistory([fallbackMsg]);
+        aiChatHistoryRef.current = [fallbackMsg];
       } finally {
         setIsAiLoading(false);
         isAiLoadingRef.current = false;
@@ -253,6 +276,10 @@ export default function ConversationPage() {
 
     return () => {
       stopAudio();
+      if (stopTimeoutRef.current) {
+        clearTimeout(stopTimeoutRef.current);
+        stopTimeoutRef.current = null;
+      }
       if (recognitionInstanceRef.current) {
         try {
           recognitionInstanceRef.current.onend = null;
@@ -267,6 +294,29 @@ export default function ConversationPage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [aiChatHistory, isAiLoading]);
+
+  // Safely finalize recognition and send captured transcript
+  const finalizeAndSendTranscript = useCallback(() => {
+    if (stopTimeoutRef.current) {
+      clearTimeout(stopTimeoutRef.current);
+      stopTimeoutRef.current = null;
+    }
+    shouldSendOnEndRef.current = false;
+    setIsRecording(false);
+    isRecordingRef.current = false;
+
+    const textToSend =
+      currentTranscriptRef.current.trim() || userInputTextRef.current.trim();
+    setUserInputText('');
+    userInputTextRef.current = '';
+    currentTranscriptRef.current = '';
+
+    if (textToSend) {
+      sendUserMessageToAi(textToSend);
+    } else {
+      setMicError('ບໍ່ໄດ້ຍິນສຽງເວົ້າ ກະລຸນາເວົ້າໃກ້ໄມໂຄຣໂຟນ ແລະ ລອງໃໝ່ອີກຄັ້ງ (No speech detected, please try again)');
+    }
+  }, [sendUserMessageToAi]);
 
   // Start speech recognition
   const handleStartRecording = useCallback(() => {
@@ -283,6 +333,11 @@ export default function ConversationPage() {
 
     setMicError(null);
     stopAudio();
+    if (stopTimeoutRef.current) {
+      clearTimeout(stopTimeoutRef.current);
+      stopTimeoutRef.current = null;
+    }
+    shouldSendOnEndRef.current = false;
     currentTranscriptRef.current = '';
     setUserInputText('');
     userInputTextRef.current = '';
@@ -338,8 +393,16 @@ export default function ConversationPage() {
       };
 
       rec.onend = () => {
-        setIsRecording(false);
-        isRecordingRef.current = false;
+        if (stopTimeoutRef.current) {
+          clearTimeout(stopTimeoutRef.current);
+          stopTimeoutRef.current = null;
+        }
+        if (shouldSendOnEndRef.current) {
+          finalizeAndSendTranscript();
+        } else {
+          setIsRecording(false);
+          isRecordingRef.current = false;
+        }
       };
 
       rec.start();
@@ -352,34 +415,40 @@ export default function ConversationPage() {
       isRecordingRef.current = false;
       setMicError('ບໍ່ສາມາດເປີດໄມໂຄຣໂຟນໄດ້ ກະລຸນາກວດສອບສິດການໃຊ້ງານ');
     }
-  }, []);
+  }, [finalizeAndSendTranscript]);
 
   // Stop speech recognition and send captured transcript
   const handleStopRecording = useCallback(() => {
     const rec = recognitionInstanceRef.current;
-    if (rec) {
-      try {
-        rec.stop();
-      } catch {}
+    if (!rec || !isRecordingRef.current) {
+      finalizeAndSendTranscript();
+      return;
     }
-    setIsRecording(false);
-    isRecordingRef.current = false;
 
-    // Send the captured spoken text
-    setTimeout(() => {
-      const textToSend =
-        currentTranscriptRef.current.trim() || userInputTextRef.current.trim();
-      setUserInputText('');
-      userInputTextRef.current = '';
-      currentTranscriptRef.current = '';
-      if (textToSend) {
-        sendUserMessageToAi(textToSend);
+    shouldSendOnEndRef.current = true;
+    try {
+      rec.stop();
+    } catch {
+      finalizeAndSendTranscript();
+      return;
+    }
+
+    // Safety fallback timer: in case browser SpeechRecognition hangs and onend never fires
+    if (stopTimeoutRef.current) clearTimeout(stopTimeoutRef.current);
+    stopTimeoutRef.current = setTimeout(() => {
+      if (shouldSendOnEndRef.current) {
+        finalizeAndSendTranscript();
       }
-    }, 120);
-  }, [sendUserMessageToAi]);
+    }, 650);
+  }, [finalizeAndSendTranscript]);
 
   // Cancel speech recognition without sending
   const handleCancelRecording = useCallback(() => {
+    shouldSendOnEndRef.current = false;
+    if (stopTimeoutRef.current) {
+      clearTimeout(stopTimeoutRef.current);
+      stopTimeoutRef.current = null;
+    }
     const rec = recognitionInstanceRef.current;
     if (rec) {
       try {

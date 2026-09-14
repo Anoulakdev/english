@@ -22,7 +22,11 @@ export function getLevelColor(level: string) {
 
 export function ScenarioCard({ scenario, onSelect }: ScenarioCardProps) {
   return (
-    <div className="group flex flex-col justify-between p-6 rounded-3xl border border-border bg-card hover:shadow-xl hover:border-primary/40 dark:hover:border-primary/30 transition-all duration-300 relative overflow-hidden">
+    <div
+      id={`scenario-card-${scenario.id}`}
+      onClick={() => onSelect(scenario)}
+      className="group flex flex-col justify-between p-6 rounded-3xl border border-border bg-card hover:shadow-xl hover:border-primary/40 dark:hover:border-primary/30 transition-all duration-300 relative overflow-hidden cursor-pointer"
+    >
       {/* Subtle gradient accent top */}
       <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-primary/60 via-indigo-500/60 to-purple-600/60 opacity-0 group-hover:opacity-100 transition-opacity" />
 
@@ -50,6 +54,7 @@ export function ScenarioCard({ scenario, onSelect }: ScenarioCardProps) {
       {/* Action Button */}
       <div className="pt-2 border-t border-border/60">
         <button
+          id={`start-scenario-btn-${scenario.id}`}
           onClick={() => onSelect(scenario)}
           className="w-full py-2.5 rounded-xl bg-gradient-to-r from-primary to-indigo-600 hover:from-primary/95 hover:to-indigo-600/95 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-primary/20 hover:scale-[1.02] transition-all cursor-pointer"
         >
