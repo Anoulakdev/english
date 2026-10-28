@@ -1,8 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 
 export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T | ((val: T) => T)) => void] {
+  // Unique hook instance ID using standard React 19 useId hook
+  const hookId = useId();
+
   // Keep initialValue in a ref so changes to it don't trigger state sync loops
   const initialValueRef = useRef(initialValue);
   
@@ -37,20 +40,25 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
 
   // Sync state with localStorage on mount and when key changes
   useEffect(() => {
-    // Read and set state asynchronously to avoid React render conflicts
-    setTimeout(() => {
-      setStoredValue(readValue());
-    }, 0);
+    let isMounted = true;
+    
+    // Initial read on mount
+    const current = readValue();
+    setStoredValue(current);
 
     const handleStorageChange = (e: StorageEvent | CustomEvent) => {
+      if (!isMounted) return;
+
       // If it is a standard StorageEvent (cross-tab)
       if ('key' in e && e.key !== null && e.key !== key) {
         return;
       }
       
       // If it is our custom Event
-      if (e instanceof CustomEvent && e.detail && e.detail.key !== key) {
-        return;
+      if (e instanceof CustomEvent && e.detail) {
+        if (e.detail.key !== key) return;
+        // Avoid re-rendering the component instance that initiated the change
+        if (e.detail.sourceId === hookId) return;
       }
 
       setStoredValue(readValue());
@@ -60,10 +68,11 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
     window.addEventListener('local-storage-update', handleStorageChange as EventListener);
 
     return () => {
+      isMounted = false;
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('local-storage-update', handleStorageChange as EventListener);
     };
-  }, [key, readValue]);
+  }, [key, readValue, hookId]);
 
   // Setter function that triggers updates across components
   const setValue = useCallback((value: T | ((val: T) => T)) => {
@@ -71,26 +80,23 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
       setStoredValue((currentValue) => {
         const newValue = value instanceof Function ? value(currentValue) : value;
         if (typeof window !== 'undefined') {
-          // Defer the localStorage write and event dispatching to avoid React render conflicts
-          setTimeout(() => {
-            try {
-              window.localStorage.setItem(key, JSON.stringify(newValue));
-              window.dispatchEvent(
-                new CustomEvent('local-storage-update', {
-                  detail: { key },
-                })
-              );
-            } catch (err) {
-              console.warn(`Error writing localStorage key "${key}":`, err);
-            }
-          }, 0);
+          try {
+            window.localStorage.setItem(key, JSON.stringify(newValue));
+            window.dispatchEvent(
+              new CustomEvent('local-storage-update', {
+                detail: { key, sourceId: hookId },
+              })
+            );
+          } catch (err) {
+            console.warn(`Error writing localStorage key "${key}":`, err);
+          }
         }
         return newValue;
       });
     } catch (error) {
       console.warn(`Error setting localStorage key "${key}":`, error);
     }
-  }, [key]);
+  }, [key, hookId]);
 
   return [storedValue, setValue];
 }

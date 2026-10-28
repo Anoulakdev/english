@@ -5,9 +5,9 @@ const BASE_PATH = self.location.pathname.startsWith('/english') ? '/english' : '
 
 const STATIC_ASSETS = [
   `${BASE_PATH}/`,
+  `${BASE_PATH}/vocabulary`,
   `${BASE_PATH}/conversation`,
   `${BASE_PATH}/quiz`,
-  `${BASE_PATH}/favorites`,
   `${BASE_PATH}/manifest.json`,
   `${BASE_PATH}/icons/icon-192x192.png`,
   `${BASE_PATH}/icons/icon-512x512.png`,
@@ -50,14 +50,20 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   // Bypass service worker for non-GET and API routes (AI & streaming)
-  if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) {
+  if (
+    event.request.method !== 'GET' ||
+    url.pathname.startsWith('/api/') ||
+    (BASE_PATH && url.pathname.startsWith(`${BASE_PATH}/api/`))
+  ) {
     return;
   }
 
   // Static Assets (Icons, Fonts, Images, Audio, Next Static Chunks): Cache First with background update
   if (
     url.pathname.startsWith('/_next/static/') ||
+    (BASE_PATH && url.pathname.startsWith(`${BASE_PATH}/_next/static/`)) ||
     url.pathname.startsWith('/icons/') ||
+    (BASE_PATH && url.pathname.startsWith(`${BASE_PATH}/icons/`)) ||
     url.pathname.endsWith('.png') ||
     url.pathname.endsWith('.svg') ||
     url.pathname.endsWith('.woff2') ||

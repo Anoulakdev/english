@@ -1,11 +1,19 @@
+export interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence?: number;
+}
+
+export interface SpeechRecognitionResultItem {
+  isFinal?: boolean;
+  length: number;
+  [key: number]: SpeechRecognitionAlternative;
+}
+
 export interface SpeechRecognitionEvent {
-  resultIndex: number;
+  resultIndex?: number;
   results: {
-    [key: number]: {
-      [key: number]: {
-        transcript: string;
-      };
-    };
+    length: number;
+    [key: number]: SpeechRecognitionResultItem;
   };
 }
 
@@ -16,6 +24,7 @@ export interface SpeechRecognitionErrorEvent {
 export interface SpeechRecognition {
   continuous: boolean;
   interimResults: boolean;
+  maxAlternatives?: number;
   lang: string;
   onstart: (() => void) | null;
   onresult: ((event: SpeechRecognitionEvent) => void) | null;

@@ -9,6 +9,34 @@
 
 let activeUtterance: SpeechSynthesisUtterance | null = null;
 let cachedVoices: SpeechSynthesisVoice[] = [];
+let cachedBestVoice: SpeechSynthesisVoice | null = null;
+let pendingTimeout: NodeJS.Timeout | null = null;
+let heartbeatInterval: NodeJS.Timeout | null = null;
+
+const stopHeartbeat = () => {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+};
+
+const startHeartbeat = () => {
+  stopHeartbeat();
+  if (typeof window === 'undefined' || !window.speechSynthesis) return;
+  // Chrome bug workaround: keep synthesis engine active for longer phrases
+  heartbeatInterval = setInterval(() => {
+    try {
+      if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      } else if (!window.speechSynthesis.speaking) {
+        stopHeartbeat();
+      }
+    } catch {
+      stopHeartbeat();
+    }
+  }, 10000);
+};
 
 // ─────────────────────────────────────────────────────────────────
 // 1. Pre-warm & Cache Voices Immediately on Browser Load
@@ -21,15 +49,21 @@ const loadVoices = () => {
     const voices = synth.getVoices();
     if (voices && voices.length > 0) {
       cachedVoices = voices;
+      cachedBestVoice = null; // Re-evaluate on new voices
     }
 
-    if (synth.onvoiceschanged !== undefined) {
-      synth.onvoiceschanged = () => {
-        const v = synth.getVoices();
-        if (v && v.length > 0) {
-          cachedVoices = v;
-        }
-      };
+    const onVoicesUpdate = () => {
+      const v = synth.getVoices();
+      if (v && v.length > 0) {
+        cachedVoices = v;
+        cachedBestVoice = null;
+      }
+    };
+
+    if (typeof synth.addEventListener === 'function') {
+      synth.addEventListener('voiceschanged', onVoicesUpdate);
+    } else {
+      synth.onvoiceschanged = onVoicesUpdate;
     }
   } catch {
     /* ignore */
@@ -38,8 +72,12 @@ const loadVoices = () => {
 
 if (typeof window !== 'undefined') {
   loadVoices();
-  window.addEventListener('DOMContentLoaded', loadVoices);
-  window.addEventListener('load', loadVoices);
+  if (document.readyState === 'complete') {
+    loadVoices();
+  } else {
+    window.addEventListener('DOMContentLoaded', loadVoices, { once: true });
+    window.addEventListener('load', loadVoices, { once: true });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -47,6 +85,10 @@ if (typeof window !== 'undefined') {
 // ─────────────────────────────────────────────────────────────────
 export const pickBestVoice = (preferredLang = 'en-US'): SpeechSynthesisVoice | null => {
   if (typeof window === 'undefined' || !window.speechSynthesis) return null;
+
+  if (cachedBestVoice) {
+    return cachedBestVoice;
+  }
 
   const synth = window.speechSynthesis;
   const voices = cachedVoices.length > 0 ? cachedVoices : synth.getVoices();
@@ -109,7 +151,11 @@ export const pickBestVoice = (preferredLang = 'en-US'): SpeechSynthesisVoice | n
     .filter((item) => item.score > -500)
     .sort((a, b) => b.score - a.score);
 
-  return scored.length > 0 ? scored[0].voice : null;
+  const best = scored.length > 0 ? scored[0].voice : null;
+  if (best) {
+    cachedBestVoice = best;
+  }
+  return best;
 };
 
 // ─────────────────────────────────────────────────────────────────
@@ -133,7 +179,15 @@ export const playAudio = (
 
   const synth = window.speechSynthesis;
 
-  // Unstick paused engine state in Chrome / Safari
+  // Clear any existing pending speech trigger
+  if (pendingTimeout) {
+    clearTimeout(pendingTimeout);
+    pendingTimeout = null;
+  }
+
+  stopHeartbeat();
+
+  // Cleanly stop existing speech
   try {
     if (synth.paused) {
       synth.resume();
@@ -141,8 +195,9 @@ export const playAudio = (
     synth.cancel();
   } catch {}
 
-  // Short delay (10ms) allows Chrome/Safari engine to cleanly finish pending cancel
-  setTimeout(() => {
+  // Short delay (15ms) allows Chrome/Safari engine to cleanly finish pending cancel
+  pendingTimeout = setTimeout(() => {
+    pendingTimeout = null;
     try {
       const utterance = new SpeechSynthesisUtterance(clean);
       utterance.rate = 0.9;   // Clear, natural pace
@@ -160,15 +215,18 @@ export const playAudio = (
       activeUtterance = utterance;
 
       utterance.onstart = () => {
+        startHeartbeat();
         onStart();
       };
 
       utterance.onend = () => {
+        stopHeartbeat();
         if (activeUtterance === utterance) activeUtterance = null;
         onEnd();
       };
 
       utterance.onerror = (ev) => {
+        stopHeartbeat();
         if (activeUtterance === utterance) activeUtterance = null;
         if (ev.error !== 'canceled' && ev.error !== 'interrupted') {
           console.warn('[audio] Speech error:', ev.error);
@@ -183,16 +241,22 @@ export const playAudio = (
         synth.resume();
       }
     } catch (err) {
+      stopHeartbeat();
       console.warn('[audio] Play audio failed:', err);
       onEnd();
     }
-  }, 10);
+  }, 15);
 };
 
 // ─────────────────────────────────────────────────────────────────
 // 4. Stop Audio Engine
 // ─────────────────────────────────────────────────────────────────
 export const stopAudio = (): void => {
+  if (pendingTimeout) {
+    clearTimeout(pendingTimeout);
+    pendingTimeout = null;
+  }
+  stopHeartbeat();
   if (typeof window !== 'undefined' && window.speechSynthesis) {
     try {
       window.speechSynthesis.cancel();

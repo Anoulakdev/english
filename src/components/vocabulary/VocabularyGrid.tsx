@@ -5,14 +5,16 @@ import { VocabularyEmptyState } from './VocabularyEmptyState';
 
 interface VocabularyGridProps {
   words: Word[];
-  learnedWords: number[];
+  learnedWords?: number[];
+  learnedSet?: Set<number>;
   onToggleLearned: (id: number) => void;
   onResetFilters: () => void;
 }
 
 export function VocabularyGrid({
   words,
-  learnedWords,
+  learnedWords = [],
+  learnedSet,
   onToggleLearned,
   onResetFilters,
 }: VocabularyGridProps) {
@@ -26,7 +28,7 @@ export function VocabularyGrid({
         <WordCard
           key={item.id}
           wordItem={item}
-          isLearned={learnedWords.includes(item.id)}
+          isLearned={learnedSet ? learnedSet.has(item.id) : learnedWords.includes(item.id)}
           onToggleLearned={() => onToggleLearned(item.id)}
         />
       ))}

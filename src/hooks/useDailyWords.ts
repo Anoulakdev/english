@@ -1,12 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useLocalStorage } from './useLocalStorage';
-import wordsData from '@/data/words';
+import { TOTAL_WORDS_COUNT } from '@/data/wordsMeta';
 
 export function useDailyWords() {
   const [dailyWordIds, setDailyWordIds] = useLocalStorage<number[]>('daily-word-ids', []);
   const [dailyDate, setDailyDate] = useLocalStorage<string>('daily-word-date', '');
   const [learnedWords] = useLocalStorage<number[]>('learned-words', []);
   const [mounted, setMounted] = useState(false);
+
+  const learnedWordsRef = useRef<number[]>(learnedWords);
+  useEffect(() => {
+    learnedWordsRef.current = learnedWords;
+  }, [learnedWords]);
 
   useEffect(() => {
     setMounted(true);
@@ -15,33 +20,32 @@ export function useDailyWords() {
   useEffect(() => {
     if (!mounted) return;
 
-    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const d = new Date();
+    const todayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
     if (dailyDate !== todayStr || dailyWordIds.length === 0) {
-      const learnedSet = new Set(learnedWords);
-      const totalWords = wordsData.length;
+      const learnedSet = new Set(learnedWordsRef.current);
+      const totalWords = TOTAL_WORDS_COUNT;
       const selectedIdSet = new Set<number>();
       let attempts = 0;
 
-      // 1. Fast random sampling for 10 unlearned words
+      // 1. Fast O(1) random ID sampling (1..200000) for 10 unlearned words without loading 91MB JSON
       while (selectedIdSet.size < 10 && attempts < 200) {
         attempts++;
-        const randIdx = Math.floor(Math.random() * totalWords);
-        const candidate = wordsData[randIdx];
-        if (candidate && !learnedSet.has(candidate.id) && !selectedIdSet.has(candidate.id)) {
-          selectedIdSet.add(candidate.id);
+        const candidateId = Math.floor(Math.random() * totalWords) + 1;
+        if (!learnedSet.has(candidateId) && !selectedIdSet.has(candidateId)) {
+          selectedIdSet.add(candidateId);
         }
       }
 
-      // 2. If still < 10 (user learned almost everything), sample any unique words
+      // 2. Fallback if user learned almost everything
       if (selectedIdSet.size < 10) {
         attempts = 0;
         while (selectedIdSet.size < 10 && attempts < 100) {
           attempts++;
-          const randIdx = Math.floor(Math.random() * totalWords);
-          const candidate = wordsData[randIdx];
-          if (candidate && !selectedIdSet.has(candidate.id)) {
-            selectedIdSet.add(candidate.id);
+          const candidateId = Math.floor(Math.random() * totalWords) + 1;
+          if (!selectedIdSet.has(candidateId)) {
+            selectedIdSet.add(candidateId);
           }
         }
       }
@@ -49,7 +53,7 @@ export function useDailyWords() {
       setDailyWordIds(Array.from(selectedIdSet));
       setDailyDate(todayStr);
     }
-  }, [mounted, dailyDate, dailyWordIds.length, learnedWords, setDailyWordIds, setDailyDate]);
+  }, [mounted, dailyDate, dailyWordIds.length, setDailyWordIds, setDailyDate]);
 
   return dailyWordIds;
 }

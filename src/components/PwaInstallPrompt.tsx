@@ -15,19 +15,25 @@ export default function PwaInstallPrompt() {
   const [showIosGuide, setShowIosGuide] = useState(false);
 
   useEffect(() => {
-    // 1. Register Service Worker
+    // 1. Register Service Worker reliably even if window 'load' already fired
+    const registerSw = () => {
+      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+      navigator.serviceWorker
+        .register(`${basePath}/sw.js`)
+        .then((registration) => {
+          console.log('[PWA] Service Worker registered with scope:', registration.scope);
+        })
+        .catch((err) => {
+          console.warn('[PWA] Service Worker registration failed:', err);
+        });
+    };
+
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-        navigator.serviceWorker
-          .register(`${basePath}/sw.js`)
-          .then((registration) => {
-            console.log('[PWA] Service Worker registered with scope:', registration.scope);
-          })
-          .catch((err) => {
-            console.warn('[PWA] Service Worker registration failed:', err);
-          });
-      });
+      if (document.readyState === 'complete') {
+        registerSw();
+      } else {
+        window.addEventListener('load', registerSw, { once: true });
+      }
     }
 
     // 2. Check if already installed / running standalone
@@ -62,16 +68,19 @@ export default function PwaInstallPrompt() {
       }
     };
 
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    window.addEventListener('appinstalled', () => {
+    const handleAppInstalled = () => {
       setShowInstallBanner(false);
       setDeferredPrompt(null);
       console.log('[PWA] App successfully installed!');
-    });
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
+      window.removeEventListener('load', registerSw);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 

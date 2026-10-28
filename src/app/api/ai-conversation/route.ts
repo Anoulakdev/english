@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
 
     const promptText = isFirstTurn
       ? `Start the interactive roleplay for scenario: "${scenarioTitle || scenarioId}". Welcome the learner as your character "${speakerName}" in 1-2 natural sentences fitting for level ${userLevel}, and ask an engaging opening question to start.`
-      : `Conversation history:\n${JSON.stringify(messages.slice(-6))}\n\nRespond to user's latest statement: "${lastUserMessage}"`;
+      : `Recent history:\n${JSON.stringify(messages.slice(-4))}\n\nRespond to user's latest statement: "${lastUserMessage}"`;
 
     const systemPrompt = `You are an expert, encouraging English conversation tutor roleplaying in an interactive practice scenario.
 Scenario: "${scenarioTitle || scenarioId}".
@@ -56,13 +56,14 @@ User English Level: "${userLevel}".
 
 Guidelines:
 1. Stay in character as "${speakerName}" naturally and engagingly.
-2. Reply in concise, realistic, conversational English (1-3 sentences max).
+2. Reply in concise, realistic, conversational English (1-2 sentences max for fast, natural chat flow).
 3. Do NOT lecture. Keep the dialogue moving forward by asking a natural follow-up question or responding directly.
 4. Translate your English reply into natural, polite Lao (ພາສາລາວ).
-5. Provide a short constructive 1-sentence learning feedback/tip (in Lao or bilingual) on the user's latest sentence (grammar, pronunciation tip, or more natural native phrasing).
-6. Provide 3 suggested natural responses the user could say next (with English and Lao translation) to help them keep the conversation flowing.
+5. Provide a short constructive 1-sentence learning feedback/tip (in Lao or bilingual) on the user's latest sentence.
+6. Provide 3 short, natural suggested responses the user could say next (with English and Lao translation).
 
-You MUST respond strictly in valid JSON format matching the schema.`;
+You MUST respond strictly in valid JSON matching this exact structure:
+{"reply":"string","meaning_lao":"string","speakerName":"string","feedback":"string","suggestions":[{"text":"string","meaning_lao":"string"}]}`;
 
     const contents = [
       {
@@ -71,20 +72,46 @@ You MUST respond strictly in valid JSON format matching the schema.`;
       },
     ];
 
-    // Low-latency conversational models in order of speed & capability
-    const candidateModels = [
-      "gemini-3.1-flash-lite",
-      "gemini-3.5-flash",
-      "gemini-3.6-flash",
+    // Ultra-low-latency conversational models ordered by benchmarked response speed
+    const candidateModels: Array<{
+      name: string;
+      thinkingConfig?: { thinkingBudget?: number; thinkingLevel?: string };
+      timeoutMs: number;
+    }> = [
+      {
+        name: "gemini-3-flash-preview",
+        thinkingConfig: { thinkingBudget: 0 },
+        timeoutMs: 4200,
+      },
+      {
+        name: "gemini-3.1-flash-lite",
+        thinkingConfig: { thinkingBudget: 0 },
+        timeoutMs: 4200,
+      },
+      {
+        name: "gemini-3.5-flash",
+        thinkingConfig: { thinkingBudget: 0 },
+        timeoutMs: 4500,
+      },
+      {
+        name: "gemini-3.7-flash",
+        timeoutMs: 4500,
+      },
+      {
+        name: "gemini-3.8-flash",
+        timeoutMs: 4500,
+      },
     ];
 
-    for (const modelName of candidateModels) {
+    for (const modelCfg of candidateModels) {
+      const modelName = modelCfg.name;
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey.trim()}`;
 
         const geminiRes = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(modelCfg.timeoutMs),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: systemPrompt }],
@@ -92,35 +119,11 @@ You MUST respond strictly in valid JSON format matching the schema.`;
             contents,
             generationConfig: {
               responseMimeType: "application/json",
-              responseSchema: {
-                type: "OBJECT",
-                properties: {
-                  reply: { type: "STRING" },
-                  meaning_lao: { type: "STRING" },
-                  speakerName: { type: "STRING" },
-                  feedback: { type: "STRING" },
-                  suggestions: {
-                    type: "ARRAY",
-                    items: {
-                      type: "OBJECT",
-                      properties: {
-                        text: { type: "STRING" },
-                        meaning_lao: { type: "STRING" },
-                      },
-                      required: ["text", "meaning_lao"],
-                    },
-                  },
-                },
-                required: [
-                  "reply",
-                  "meaning_lao",
-                  "speakerName",
-                  "feedback",
-                  "suggestions",
-                ],
-              },
-              temperature: 0.6,
-              maxOutputTokens: 800,
+              ...(modelCfg.thinkingConfig
+                ? { thinkingConfig: modelCfg.thinkingConfig }
+                : {}),
+              temperature: 0.5,
+              maxOutputTokens: 350,
             },
           }),
         });

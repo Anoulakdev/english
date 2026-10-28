@@ -95,11 +95,10 @@ function VocabularyContent() {
   // Categories list memoized (static 0ms)
   const categoriesList = CATEGORIES_LIST;
 
-  // Filter application memoized (Fast indexed slicing & non-blocking search)
-  const filteredWords = useMemo(() => {
+  // 1. Base pool & search query filtering (independent of learnedSet so marking learned does not re-filter 200k words!)
+  const searchFilteredPool = useMemo(() => {
     const q = deferredSearchQuery.toLowerCase().trim();
 
-    // 1. Determine base pool efficiently
     let pool: Word[];
     if (isDailyMode) {
       pool = dailyWordIds.map((id) => wordsData[id - 1]).filter(Boolean) as Word[];
@@ -110,39 +109,36 @@ function VocabularyContent() {
       pool = wordsData;
     }
 
-    // 2. Filter criteria
-    const result = pool.filter((item) => {
-      // Search Query
-      if (
-        q &&
-        !item.word.toLowerCase().includes(q) &&
-        !item.meaning.toLowerCase().includes(q)
-      ) {
-        return false;
-      }
+    if (!q) return pool;
 
-      // Status Filter
-      const isLearned = learnedSet.has(item.id);
-      if (statusFilter === 'learned' && !isLearned) return false;
-      if (statusFilter === 'unlearned' && isLearned) return false;
+    return pool.filter(
+      (item) =>
+        item.word.toLowerCase().includes(q) ||
+        item.meaning.toLowerCase().includes(q)
+    );
+  }, [deferredSearchQuery, selectedCategory, isDailyMode, dailyWordIds]);
 
-      return true;
-    });
-
-    // 3. Apply deterministic shuffle if requested based on shuffleSeed
-    if (shuffleSeed > 0) {
-      const shuffled = [...result];
-      let seed = shuffleSeed;
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        seed = (seed * 9301 + 49297) % 233280;
-        const j = Math.floor((seed / 233280) * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      return shuffled;
+  // 2. Apply deterministic shuffle before status filter so marking a word as learned in 'all' mode never jumps cards around!
+  const shuffledPool = useMemo(() => {
+    if (shuffleSeed <= 0) return searchFilteredPool;
+    const shuffled = [...searchFilteredPool];
+    let seed = shuffleSeed;
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      seed = (seed * 9301 + 49297) % 233280;
+      const j = Math.floor((seed / 233280) * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
+    return shuffled;
+  }, [searchFilteredPool, shuffleSeed]);
 
-    return result;
-  }, [deferredSearchQuery, selectedCategory, statusFilter, isDailyMode, dailyWordIds, learnedSet, shuffleSeed]);
+  // 3. Apply status filter only when statusFilter !== 'all'
+  const filteredWords = useMemo(() => {
+    if (statusFilter === 'all') return shuffledPool;
+    if (statusFilter === 'learned') {
+      return shuffledPool.filter((item) => learnedSet.has(item.id));
+    }
+    return shuffledPool.filter((item) => !learnedSet.has(item.id));
+  }, [shuffledPool, statusFilter, learnedSet]);
 
   // Pagination calculation
   const totalItems = filteredWords.length;
@@ -155,10 +151,10 @@ function VocabularyContent() {
     [filteredWords, startIndex, endIndex]
   );
 
-  const dailyLearnedCount = useMemo(
-    () => filteredWords.filter((w) => learnedSet.has(w.id)).length,
-    [filteredWords, learnedSet]
-  );
+  const dailyLearnedCount = useMemo(() => {
+    if (!isDailyMode) return 0;
+    return filteredWords.filter((w) => learnedSet.has(w.id)).length;
+  }, [isDailyMode, filteredWords, learnedSet]);
 
   if (!mounted) {
     return (
@@ -209,6 +205,7 @@ function VocabularyContent() {
       <VocabularyGrid
         words={paginatedWords}
         learnedWords={learnedWords}
+        learnedSet={learnedSet}
         onToggleLearned={handleToggleLearned}
         onResetFilters={handleResetFilters}
       />

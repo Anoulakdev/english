@@ -4,38 +4,11 @@ import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { useDailyWords } from '@/hooks/useDailyWords';
-import wordsData from '@/data/words';
-
-// Static category metadata & exact counts for ultra-fast O(1) rendering
-const CATEGORIES_CONFIG = [
-  { name: 'Daily', total: 24000, emoji: '☀️', nameLao: 'ຊີວິດປະຈຳວັນ' },
-  { name: 'Food', total: 16000, emoji: '🍔', nameLao: 'ອາຫານ ແລະ ເຄື່ອງດື່ມ' },
-  { name: 'Health', total: 16000, emoji: '💊', nameLao: 'ສຸຂະພາບ ແລະ ການແພດ' },
-  { name: 'Travel', total: 16000, emoji: '✈️', nameLao: 'ການທ່ອງທ່ຽວ ແລະ ເດີນທາງ' },
-  { name: 'Work', total: 16000, emoji: '💼', nameLao: 'ການເຮັດວຽກ ແລະ ອາຊີບ' },
-  { name: 'Shopping', total: 16000, emoji: '🛒', nameLao: 'ການຊື້ເຄື່ອງ ແລະ ສິນຄ້າ' },
-  { name: 'Social', total: 16000, emoji: '💬', nameLao: 'ການເຂົ້າສັງຄົມ ແລະ ໝູ່ເພື່ອນ' },
-  { name: 'Technology', total: 16000, emoji: '💻', nameLao: 'ເຕັກໂນໂລຊີ ແລະ ໄອທີ' },
-  { name: 'Education', total: 16000, emoji: '🎓', nameLao: 'ການສຶກສາ ແລະ ການຮຽນຮູ້' },
-  { name: 'Business', total: 16000, emoji: '📈', nameLao: 'ທຸລະກິດ ແລະ ການເງິນ' },
-  { name: 'Entertainment', total: 16000, emoji: '🎬', nameLao: 'ບັນເທີງ, ດົນຕີ & ກິລາ' },
-  { name: 'Nature', total: 16000, emoji: '🌿', nameLao: 'ທຳມະຊາດ ແລະ ສິ່ງແວດລ້ອມ' },
-];
-
-function getCategoryByWordId(id: number): string {
-  if (id <= 24000) return 'Daily';
-  if (id <= 40000) return 'Food';
-  if (id <= 56000) return 'Health';
-  if (id <= 72000) return 'Travel';
-  if (id <= 88000) return 'Social';
-  if (id <= 104000) return 'Work';
-  if (id <= 120000) return 'Shopping';
-  if (id <= 136000) return 'Technology';
-  if (id <= 152000) return 'Education';
-  if (id <= 168000) return 'Business';
-  if (id <= 184000) return 'Entertainment';
-  return 'Nature';
-}
+import {
+  TOTAL_WORDS_COUNT,
+  CATEGORIES_CONFIG,
+  getCategoryByWordId,
+} from '@/data/wordsMeta';
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
@@ -52,16 +25,31 @@ export default function Home() {
   const learnedSet = useMemo(() => new Set(learnedWords), [learnedWords]);
 
   // Calculate statistics memoized
-  const totalWordsCount = wordsData.length;
+  const totalWordsCount = TOTAL_WORDS_COUNT;
   const learnedCount = learnedWords.length;
   const overallProgress = totalWordsCount > 0 ? Math.round((learnedCount / totalWordsCount) * 100) : 0;
 
-  const streakCount = quizHistory.length > 0 ? Math.min(quizHistory.length + 1, 5) : 0;
+  // Calculate unique study days from quiz history and learned activity (no artificial 5-day cap)
+  const streakCount = useMemo(() => {
+    const uniqueDates = new Set<string>();
+    for (const attempt of quizHistory) {
+      if (attempt.date) {
+        const dayPart = attempt.date.split(/[,\s]+/)[0];
+        if (dayPart) uniqueDates.add(dayPart);
+      }
+    }
+    if (uniqueDates.size > 0) {
+      return uniqueDates.size;
+    }
+    return learnedCount > 0 ? 1 : 0;
+  }, [quizHistory, learnedCount]);
+
   const totalQuizzes = quizHistory.length;
   const avgScore = useMemo(() => {
     if (totalQuizzes === 0) return 0;
     return Math.round(
-      (quizHistory.reduce((acc, q) => acc + (q.score / q.total) * 100, 0) / totalQuizzes)
+      quizHistory.reduce((acc, q) => acc + (q.total > 0 ? (q.score / q.total) * 100 : 0), 0) /
+        totalQuizzes
     );
   }, [quizHistory, totalQuizzes]);
 

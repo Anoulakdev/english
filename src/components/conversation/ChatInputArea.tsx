@@ -43,8 +43,8 @@ export function ChatInputArea({
   onClearMicError,
   inputRef,
 }: ChatInputAreaProps) {
-  // Recording mode: 'idle' | 'holding' (hold-to-talk) | 'locked' (hands-free)
-  const [recordMode, setRecordMode] = useState<'idle' | 'holding' | 'locked'>('idle');
+  // Recording mode: 'idle' | 'holding' (hold-to-talk) | 'locked' (hands-free) | 'finalizing' (processing tail audio)
+  const [recordMode, setRecordMode] = useState<'idle' | 'holding' | 'locked' | 'finalizing'>('idle');
   const [recordingSeconds, setRecordingSeconds] = useState(0);
 
   // Gesture tracking (Slide to cancel / Slide up to lock)
@@ -52,15 +52,22 @@ export function ChatInputArea({
   const pointerStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const pointerStartTimeRef = useRef<number>(0);
   const pointerIdRef = useRef<number | null>(null);
+  const recordModeRef = useRef<'idle' | 'holding' | 'locked' | 'finalizing'>('idle');
+
+  const updateRecordMode = useCallback((mode: 'idle' | 'holding' | 'locked' | 'finalizing') => {
+    recordModeRef.current = mode;
+    setRecordMode(mode);
+  }, []);
 
   // Synchronize recordMode with external isRecording prop
   useEffect(() => {
     if (!isRecording) {
-      setRecordMode('idle');
+      updateRecordMode('idle');
       setDragOffset({ x: 0, y: 0 });
       setRecordingSeconds(0);
+      pointerIdRef.current = null;
     }
-  }, [isRecording]);
+  }, [isRecording, updateRecordMode]);
 
   // Recording timer & input blur
   useEffect(() => {
@@ -68,7 +75,9 @@ export function ChatInputArea({
 
     if (isRecording) {
       setRecordingSeconds(0);
-      inputRef?.current?.blur(); // Dismiss virtual mobile keyboard
+      if (document.activeElement === inputRef?.current) {
+        inputRef?.current?.blur(); // Dismiss virtual mobile keyboard only if focused
+      }
 
       interval = setInterval(() => {
         setRecordingSeconds((prev) => prev + 1);
@@ -100,22 +109,24 @@ export function ChatInputArea({
   // CANCEL & SEND RECORDING ACTIONS
   // ─────────────────────────────────────────────────────────────────
   const handleCancel = useCallback(() => {
-    triggerHaptic(30);
-    setRecordMode('idle');
+    triggerHaptic(25);
+    pointerIdRef.current = null;
+    updateRecordMode('idle');
     setDragOffset({ x: 0, y: 0 });
     if (onCancelRecording) {
       onCancelRecording();
     } else {
       onStopRecording();
     }
-  }, [onCancelRecording, onStopRecording]);
+  }, [onCancelRecording, onStopRecording, updateRecordMode]);
 
   const handleFinishAndSend = useCallback(() => {
-    triggerHaptic(25);
-    setRecordMode('idle');
+    triggerHaptic(15);
+    pointerIdRef.current = null;
+    updateRecordMode('finalizing');
     setDragOffset({ x: 0, y: 0 });
     onStopRecording();
-  }, [onStopRecording]);
+  }, [onStopRecording, updateRecordMode]);
 
   // ─────────────────────────────────────────────────────────────────
   // WHATSAPP-STYLE POINTER GESTURE HANDLERS (Touch & Mouse)
@@ -126,6 +137,10 @@ export function ChatInputArea({
   // ─────────────────────────────────────────────────────────────────
   const handleMicPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (isAiLoading || !isRecognitionSupported) return;
+    // Ignore right-click on mouse
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    e.preventDefault();
 
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -136,21 +151,21 @@ export function ChatInputArea({
     pointerStartTimeRef.current = Date.now();
     setDragOffset({ x: 0, y: 0 });
 
-    triggerHaptic(35);
+    // Note: Do NOT vibrate on pointerDown as phone vibration motor noise
+    // gets picked up by the microphone right as SpeechRecognition calibrates AGC!
 
-    if (recordMode === 'idle') {
-      setRecordMode('holding');
-      if (!isRecording) {
-        onStartRecording();
-      }
-    } else if (recordMode === 'locked') {
-      // In locked mode, tapping the mic button sends immediately
+    if (recordModeRef.current === 'idle') {
+      updateRecordMode('holding');
+      onStartRecording();
+    } else if (recordModeRef.current === 'locked') {
+      // In locked mode, tapping the mic button finishes and sends
       handleFinishAndSend();
     }
   };
 
   const handleMicPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (recordMode !== 'holding') return;
+    if (recordModeRef.current !== 'holding') return;
+    if (pointerIdRef.current !== null && e.pointerId !== pointerIdRef.current) return;
 
     const dx = e.clientX - pointerStartPosRef.current.x;
     const dy = e.clientY - pointerStartPosRef.current.y;
@@ -162,8 +177,9 @@ export function ChatInputArea({
 
     // Gesture: Slide up to Lock hands-free recording (-50px)
     if (dy <= -50) {
-      triggerHaptic([20, 35]);
-      setRecordMode('locked');
+      triggerHaptic(20);
+      pointerIdRef.current = null;
+      updateRecordMode('locked');
       setDragOffset({ x: 0, y: 0 });
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
@@ -173,7 +189,6 @@ export function ChatInputArea({
 
     // Gesture: Slide left to Cancel (-75px threshold)
     if (dx <= -75) {
-      triggerHaptic([30, 45]);
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {}
@@ -182,11 +197,14 @@ export function ChatInputArea({
   };
 
   const handleMicPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (pointerIdRef.current !== null && e.pointerId !== pointerIdRef.current) return;
+
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {}
+    pointerIdRef.current = null;
 
-    if (recordMode === 'holding') {
+    if (recordModeRef.current === 'holding') {
       const duration = Date.now() - pointerStartTimeRef.current;
       const dx = dragOffset.x;
 
@@ -195,22 +213,32 @@ export function ChatInputArea({
         handleCancel();
       } else if (duration < 320) {
         // Short tap: switch to hands-free locked mode so user can speak comfortably without holding!
-        triggerHaptic(20);
-        setRecordMode('locked');
+        updateRecordMode('locked');
         setDragOffset({ x: 0, y: 0 });
       } else {
-        // Released after holding (> 320ms): WhatsApp instant send!
+        // Released after holding (> 320ms): capture trailing syllable & send!
         handleFinishAndSend();
       }
     }
   };
 
   const handleMicPointerCancel = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (pointerIdRef.current !== null && e.pointerId !== pointerIdRef.current) return;
+
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {}
-    if (recordMode === 'holding') {
-      handleCancel();
+    pointerIdRef.current = null;
+
+    if (recordModeRef.current === 'holding') {
+      const duration = Date.now() - pointerStartTimeRef.current;
+      // If pointercancel was triggered by OS after user already spoke, lock instead of losing their speech!
+      if (userInputText.trim().length > 0 || duration > 600) {
+        updateRecordMode('locked');
+        setDragOffset({ x: 0, y: 0 });
+      } else {
+        handleCancel();
+      }
     }
   };
 
@@ -265,9 +293,11 @@ export function ChatInputArea({
       )}
 
       {/* ───────────────────────────────────────────────────────────── */}
-      {/* 2. Suggested Quick Replies (Shown when Idle)                  */}
+      {/* 2. Suggested Quick Replies (Kept visible during recording so   */}
+      {/*    learners can read prompts while holding to speak & avoid    */}
+      {/*    layout shifts on pointer down)                              */}
       {/* ───────────────────────────────────────────────────────────── */}
-      {recordMode === 'idle' && !isRecording && aiSuggestions.length > 0 && !isAiLoading && (
+      {aiSuggestions.length > 0 && !isAiLoading && (
         <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs no-scrollbar">
           <span className="text-[10px] font-bold text-muted uppercase tracking-wider shrink-0">
             💡 ຄຳຕອບແນະນຳ:
@@ -276,8 +306,9 @@ export function ChatInputArea({
             <button
               key={i}
               type="button"
+              disabled={recordMode !== 'idle'}
               onClick={() => onSendMessage(sug.text)}
-              className="px-3 py-1.5 rounded-full bg-primary/5 hover:bg-primary/15 border border-primary/20 hover:border-primary/40 text-foreground text-xs font-medium shrink-0 transition-all cursor-pointer flex items-center gap-1.5 group active:scale-95"
+              className="px-3 py-1.5 rounded-full bg-primary/5 hover:bg-primary/15 border border-primary/20 hover:border-primary/40 text-foreground text-xs font-medium shrink-0 transition-all cursor-pointer flex items-center gap-1.5 group active:scale-95 disabled:cursor-default"
               title={sug.meaning_lao}
             >
               <span>{sug.text}</span>
@@ -386,47 +417,78 @@ export function ChatInputArea({
             </button>
           </div>
         ) : (
-          /* ── MODE B: IDLE OR HOLDING (Standard WhatsApp Flow) ── */
-          <div className="relative flex-1 flex items-center">
-            {/* When Holding: Slide-to-Cancel Bar Overlay */}
-            {recordMode === 'holding' ? (
-              <div className="w-full flex items-center justify-between px-3.5 py-3 rounded-2xl bg-rose-500/10 border-2 border-rose-500/40 text-foreground animate-scale-up">
-                {/* Left: Red recording blinker & timer */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
-                  <span className="font-mono font-bold text-xs text-rose-600 dark:text-rose-400">
-                    {formatDuration(recordingSeconds)}
-                  </span>
+          /* ── MODE B: IDLE, HOLDING, OR FINALIZING ── */
+          <div className="relative flex-1 flex items-center min-w-0">
+            {/* When Holding or Finalizing: Live Speech & Slide-to-Cancel Bar Overlay */}
+            {recordMode === 'holding' || recordMode === 'finalizing' ? (
+              <div className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-rose-500/10 border-2 border-rose-500/40 text-foreground animate-scale-up min-w-0">
+                {/* Left: Red recording blinker, timer & live spoken transcript */}
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+                    <span className="font-mono font-bold text-xs text-rose-600 dark:text-rose-400">
+                      {formatDuration(recordingSeconds)}
+                    </span>
+                  </div>
+
+                  {/* Live Transcript Preview inside Hold-to-Speak Bar */}
+                  <div className="min-w-0 flex-1 truncate pl-1 border-l border-rose-500/25">
+                    {hasText ? (
+                      <span className="text-xs font-semibold text-foreground tracking-wide">
+                        “{userInputText}”
+                      </span>
+                    ) : recordMode === 'finalizing' ? (
+                      <span className="text-xs text-rose-600 dark:text-rose-400 font-medium animate-pulse">
+                        ⏳ ກຳລັງປະມວນຜົນສຽງ...
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted italic animate-pulse">
+                        🎙️ ກຳລັງຟັງສຽງ... (ເວົ້າພາສາອັງກິດ)
+                      </span>
+                    )}
+                  </div>
                 </div>
 
-                {/* Center / Right: Interactive Sliding Cancel Cue */}
-                <div
-                  className="flex items-center gap-1.5 transition-transform duration-75 text-xs font-semibold text-muted"
-                  style={{ transform: `translateX(${dragOffset.x}px)` }}
-                >
-                  <span
-                    className={`transition-colors flex items-center gap-1 ${
-                      isNearCancel ? 'text-rose-500 font-bold animate-trash-shake' : 'text-muted'
-                    }`}
+                {/* Right: Interactive Sliding Cancel Cue (or Cancel Button when finalizing) */}
+                {recordMode === 'finalizing' ? (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-400 text-[11px] font-bold shrink-0 cursor-pointer"
                   >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      strokeWidth="2"
-                      stroke="currentColor"
-                      className="w-4 h-4"
+                    ຍົກເລີກ
+                  </button>
+                ) : (
+                  <div
+                    className="flex items-center gap-1 transition-transform duration-75 text-[11px] font-semibold text-muted shrink-0"
+                    style={{ transform: `translateX(${dragOffset.x}px)` }}
+                  >
+                    <span
+                      className={`transition-colors flex items-center gap-1 ${
+                        isNearCancel ? 'text-rose-500 font-bold animate-trash-shake' : 'text-muted'
+                      }`}
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
-                      />
-                    </svg>
-                    <span>{isNearCancel ? 'ປ່ອຍເພື່ອຍົກເລີກ' : 'ເລື່ອນຊ້າຍເພື່ອຍົກເລີກ'}</span>
-                  </span>
-                  <span className="animate-slide-chevron text-sm">‹‹‹</span>
-                </div>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        strokeWidth="2"
+                        stroke="currentColor"
+                        className="w-3.5 h-3.5"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
+                        />
+                      </svg>
+                      <span className="hidden sm:inline">
+                        {isNearCancel ? 'ປ່ອຍເພື່ອຍົກເລີກ' : 'ເລື່ອນຊ້າຍເພື່ອຍົກເລີກ'}
+                      </span>
+                    </span>
+                    <span className="animate-slide-chevron text-sm">‹‹‹</span>
+                  </div>
+                )}
               </div>
             ) : (
               /* Idle: Regular Text Input */
@@ -451,7 +513,7 @@ export function ChatInputArea({
         {/* ───────────────────────────────────────────────────────────── */}
         {recordMode === 'holding' && (
           <div
-            className={`absolute -top-14 right-2 z-20 flex flex-col items-center gap-1 px-3 py-1.5 rounded-full bg-card border shadow-lg text-xs font-bold transition-all duration-150 ${
+            className={`absolute -top-14 right-2 z-20 flex flex-col items-center gap-1 px-3 py-1.5 rounded-full bg-card border shadow-lg text-xs font-bold transition-all duration-150 pointer-events-none ${
               isNearLock
                 ? 'border-emerald-500 text-emerald-600 bg-emerald-500/10 scale-110 shadow-emerald-500/30'
                 : 'border-border text-muted animate-lock-bounce'
@@ -522,15 +584,17 @@ export function ChatInputArea({
               <button
                 id="mic-record-btn"
                 type="button"
+                onContextMenu={(e) => e.preventDefault()}
                 onPointerDown={handleMicPointerDown}
                 onPointerMove={handleMicPointerMove}
                 onPointerUp={handleMicPointerUp}
                 onPointerCancel={handleMicPointerCancel}
-                disabled={isAiLoading || !isRecognitionSupported}
+                disabled={isAiLoading || !isRecognitionSupported || recordMode === 'finalizing'}
+                style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none' }}
                 className={`w-12 h-12 rounded-2xl flex items-center justify-center select-none touch-none transition-all duration-200 cursor-pointer ${
                   !isRecognitionSupported
                     ? 'bg-secondary/40 text-muted/50 border border-border cursor-not-allowed'
-                    : recordMode === 'holding'
+                    : recordMode === 'holding' || recordMode === 'finalizing'
                     ? 'bg-rose-500 text-white scale-110 animate-mic-pulse shadow-xl shadow-rose-500/40 ring-4 ring-rose-500/20'
                     : 'bg-primary/10 hover:bg-primary/20 text-primary border border-primary/25 active:scale-95 shadow-sm shadow-primary/10'
                 }`}
@@ -547,7 +611,7 @@ export function ChatInputArea({
                   strokeWidth="2.2"
                   stroke="currentColor"
                   className={`w-5 h-5 transition-transform duration-200 ${
-                    recordMode === 'holding' ? 'scale-110' : ''
+                    recordMode === 'holding' || recordMode === 'finalizing' ? 'scale-110' : ''
                   }`}
                 >
                   <path

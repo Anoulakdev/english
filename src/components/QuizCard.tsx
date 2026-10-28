@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { playAudio } from '@/utils/audio';
+import { playAudio, stopAudio } from '@/utils/audio';
 
 interface Word {
   id: number;
@@ -52,7 +52,7 @@ export default function QuizCard({
   const cleanMeaning = (text: string) =>
     text
       .replace(/\([A-Za-z0-9\s/_\-.,']+\)/g, '')
-      .replace(/[A-Za-z0-9]/g, '')
+      .replace(/[A-Za-z]/g, '')
       .replace(/\s+/g, ' ')
       .trim() || text;
 
@@ -79,9 +79,19 @@ export default function QuizCard({
     setIsSpeaking(false);
   }, [wordItem]);
 
+  // Stop audio on unmount
+  useEffect(() => {
+    return () => {
+      stopAudio();
+    };
+  }, []);
+
   // Auto-speak on question load (helpful for learning!)
   useEffect(() => {
     speak();
+    return () => {
+      stopAudio();
+    };
   }, [speak]);
 
   const handleOptionClick = useCallback(

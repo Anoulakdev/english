@@ -79,7 +79,7 @@ export default function Quiz() {
     // Fallback to global dataset if category has few items
     if (distractors.length < 3) {
       const totalWords = wordsData.length;
-      while (distractors.length < 3 && attempts < 100) {
+      while (distractors.length < 3 && attempts < 120) {
         attempts++;
         const randIdx = Math.floor(Math.random() * totalWords);
         const candidateMeaning = wordsData[randIdx]?.meaning;
@@ -89,6 +89,20 @@ export default function Quiz() {
           !distractors.includes(candidateMeaning)
         ) {
           distractors.push(candidateMeaning);
+        }
+      }
+
+      // Final deterministic safety guarantee
+      if (distractors.length < 3) {
+        for (let i = 0; i < totalWords && distractors.length < 3; i++) {
+          const candidateMeaning = wordsData[i]?.meaning;
+          if (
+            candidateMeaning &&
+            candidateMeaning !== correctMeaning &&
+            !distractors.includes(candidateMeaning)
+          ) {
+            distractors.push(candidateMeaning);
+          }
         }
       }
     }

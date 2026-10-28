@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
-import wordsData from '@/data/words';
+import { TOTAL_WORDS_COUNT } from '@/data/wordsMeta';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -13,7 +13,7 @@ export default function Navbar() {
   const [learnedWords] = useLocalStorage<number[]>('learned-words', []);
   const [mounted, setMounted] = useState(false);
 
-  const totalWords = wordsData.length;
+  const totalWords = TOTAL_WORDS_COUNT;
   const learnedCount = learnedWords.length;
   const progressPercentage = totalWords > 0 ? Math.round((learnedCount / totalWords) * 100) : 0;
 
